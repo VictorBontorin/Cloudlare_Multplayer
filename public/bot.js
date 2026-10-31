@@ -1,0 +1,61 @@
+// Robôs (Stockfish), níveis, progressão e skins.
+export const LEVELS = Array.from({ length: 29 }, (_, i) => 200 + i * 100); // 200 ... 3000
+const TIERS = [['🐣', 'Novato'], ['🐢', 'Aprendiz'], ['🐿️', 'Curioso'], ['🦊', 'Clubista'], ['🦉', 'Tático'],
+  ['🐺', 'Estrategista'], ['🦅', 'Mestre'], ['🐉', 'Grande Mestre'], ['🤖', 'Máquina']];
+export const tier = i => TIERS[Math.min(8, Math.floor(i / 3.3))];
+
+// Do Stockfish: UCI_Elo vai de 1320 a 3190 (escala CCRL). Abaixo de 1320 não há calibração oficial:
+// o robô usa o mínimo do Stockfish e erra de propósito com lances aleatórios (valores aproximados).
+export function params(elo) {
+  if (elo < 1320) return { elo: 1320, ms: 80, blunder: 0.08 + 0.82 * (1320 - elo) / 1120 };
+  return { elo: Math.min(elo, 3190), ms: Math.round(400 + (elo - 1320) / 1870 * 1100), blunder: 0 };
+}
+
+export class Engine {
+  constructor() {
+    this.w = new Worker('/stockfish/stockfish-19-lite-single.js');
+    this.on = null;
+    this.w.onmessage = e => { if (this.on && typeof e.data === 'string') this.on(e.data); };
+    this.ready = new Promise((res, rej) => {
+      this.w.onerror = () => rej(new Error('stockfish'));
+      this.cmd('uci', 'uciok').then(() => this.cmd('isready', 'readyok')).then(res, rej);
+    });
+  }
+  cmd(c, wait) {
+    return new Promise(res => {
+      if (wait) this.on = l => { if (l.startsWith(wait)) { this.on = null; res(l); } };
+      this.w.postMessage(c);
+      if (!wait) res();
+    });
+  }
+  async best(moves, p) {
+    await this.ready;
+    await this.cmd('setoption name UCI_LimitStrength value true');
+    await this.cmd('setoption name UCI_Elo value ' + p.elo);
+    await this.cmd('position startpos' + (moves.length ? ' moves ' + moves.join(' ') : ''));
+    const l = await this.cmd('go movetime ' + p.ms, 'bestmove');
+    return l.split(' ')[1];
+  }
+}
+
+export const SKINS = [
+  { id: 'classico', nome: 'Clássico', at: 0 },
+  { id: 'madeira', nome: 'Madeira', at: 600 },
+  { id: 'oceano', nome: 'Oceano', at: 1000 },
+  { id: 'neon', nome: 'Neon', at: 1400 },
+  { id: 'marmore', nome: 'Mármore', at: 1800 },
+  { id: 'ouro', nome: 'Ouro Real', at: 2200 },
+  { id: 'obsidiana', nome: 'Obsidiana', at: 2600 },
+  { id: 'dragao', nome: 'Dragão', at: 3000 },
+];
+
+const KEY = 'xadrez_prog';
+export const prog = (() => {
+  try { return { best: -1, skin: 'classico', ...JSON.parse(localStorage[KEY] || '{}') }; }
+  catch { return { best: -1, skin: 'classico' }; }
+})();
+export const save = () => { localStorage[KEY] = JSON.stringify(prog); };
+export const bestElo = () => (prog.best < 0 ? 0 : LEVELS[prog.best]);
+export const skinOpen = s => s.at === 0 || bestElo() >= s.at;
+export const applySkin = id => { prog.skin = id; document.documentElement.dataset.skin = id; save(); };
+document.documentElement.dataset.skin = SKINS.some(s => s.id === prog.skin) ? prog.skin : 'classico';

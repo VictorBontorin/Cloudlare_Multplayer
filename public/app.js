@@ -1,4 +1,6 @@
 import { Chess, sqName, sqIdx } from '/chess.js';
+import { play, muted, setMute } from '/sound.js';
+import { LEVELS, tier, params, Engine, SKINS, prog, save, bestElo, skinOpen, applySkin } from '/bot.js';
 
 const $ = s => document.querySelector(s);
 const G = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
@@ -11,11 +13,11 @@ const WHY = {
   timeout: 'tempo esgotado', agreement: 'acordo', aborted: 'partida abortada',
 };
 
-let ws, S, g, code, off = 0, sel = null, flip = false, chatN = 0, anim = null;
+let ws, S, g, code, off = 0, sel = null, flip = false, chatN = 0, anim = null, local = false, lg, LC;
 const cor = p => (p < 'a' ? 'w' : 'b');
 const me = () => (S.you === 'w' || S.you === 'b' ? S.you : null);
 const myTurn = () => S.status === 'playing' && me() === g.turn;
-const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+const send = o => (local ? localSend(o) : ws && ws.readyState === 1 && ws.send(JSON.stringify(o)));
 
 function toast(t) {
   const e = $('#toast');
@@ -89,7 +91,16 @@ function update(d) {
     }
   }
   const doMate = old && old.status === 'playing' && d.status === 'over' && d.result.reason === 'checkmate';
-  const delay = anim ? 750 : 0;
+  const delay = anim ? 1000 : 0;
+  if (anim) {
+    const mv = anim.mv;
+    play(mv.promotion ? 'promote' : anim.rook ? 'castle' : anim.cap ? 'capture' : 'move', 300);
+    if (doMate) play('mate', delay); else if (g.inCheck()) play('check', 450);
+  }
+  if (old && old.status === 'playing' && d.status === 'over') {
+    const w = d.result.winner, m = local && !LC.bot ? null : me();
+    play(w && m ? (w === m ? 'win' : 'lose') : 'end', doMate ? 2400 : anim ? 600 : 100);
+  }
   render();
   if (doMate) setTimeout(() => mate(d.result.winner), delay);
 }
@@ -101,25 +112,81 @@ const cell = (n, bot) => {
   return bot === 'w' ? { c: f, r } : { c: 7 - f, r: 7 - r };
 };
 
+function fxBox(P, extra = '') {
+  const box = document.createElement('div');
+  box.className = 'fxs' + extra;
+  box.style.left = P.c * 12.5 + '%'; box.style.top = P.r * 12.5 + '%';
+  $('#fx').append(box);
+  return box;
+}
+
+function dust(P, delay) {
+  const box = fxBox(P), r = document.createElement('div');
+  r.className = 'dust'; box.append(r);
+  r.animate([{ transform: 'scale(.3)', opacity: 0.7 }, { transform: 'scale(1.35)', opacity: 0 }], { duration: 380, delay, fill: 'both' });
+  setTimeout(() => box.remove(), delay + 450);
+}
+
+function burst(P, sz) {
+  const box = fxBox(P), ring = document.createElement('div');
+  ring.className = 'ring'; box.append(ring);
+  ring.animate([{ transform: 'scale(.2)', opacity: 1 }, { transform: 'scale(2.1)', opacity: 0 }], { duration: 600, fill: 'both' });
+  for (let i = 0; i < 8; i++) {
+    const k = document.createElement('i'), ang = i * Math.PI / 4;
+    k.className = 'spk'; k.textContent = '✦'; box.append(k);
+    k.animate([{ transform: 'translate(0,0) scale(.4)', opacity: 1 },
+      { transform: `translate(${Math.cos(ang) * sz * .75}px,${Math.sin(ang) * sz * .75}px) scale(1.3) rotate(120deg)`, opacity: 0 }],
+      { duration: 650, easing: 'ease-out', fill: 'both' });
+  }
+  setTimeout(() => box.remove(), 800);
+}
+
 function playAnim(a, bot) {
   if (still()) return;
-  const B = $('#board'), sz = B.clientWidth / 8;
-  const slide = (from, to) => {
-    const A = cell(from, bot), T = cell(to, bot), d = B.children[T.r * 8 + T.c], b = d.querySelector('b');
+  const B = $('#board'), sz = B.clientWidth / 8, mv = a.mv;
+  const sq = P => B.children[P.r * 8 + P.c];
+  const hop = (from, to, knight) => {
+    const F = cell(from, bot), T = cell(to, bot), d = sq(T), b = d.querySelector('b');
     if (!b) return;
+    const dx = (F.c - T.c) * sz, dy = (F.r - T.r) * sz, up = knight ? -sz * .5 : -sz * .12, big = knight ? 1.35 : 1.15, dur = knight ? 420 : 340;
     d.style.zIndex = 6;
-    const an = b.animate(
-      [{ transform: `translate(${(A.c - T.c) * sz}px,${(A.r - T.r) * sz}px)` }, { transform: 'none' }],
-      { duration: 220, easing: 'cubic-bezier(.3,.7,.3,1)' });
-    an.onfinish = () => { d.style.zIndex = ''; };
+    b.animate([
+      { transform: `translate(${dx}px,${dy}px) scale(1)`, filter: 'drop-shadow(0 0 0 #0000)', offset: 0 },
+      { transform: `translate(${dx * .8}px,${dy * .8 + up * .5}px) scale(${big})`, filter: 'drop-shadow(0 10px 6px #0006)', offset: .2 },
+      { transform: `translate(${dx * .4}px,${dy * .4 + up}px) scale(${big})`, filter: 'drop-shadow(0 12px 7px #0005)', offset: .5 },
+      { transform: `translate(0,${up * .3}px) scale(${big * .98})`, filter: 'drop-shadow(0 8px 5px #0005)', offset: .8 },
+      { transform: 'translate(0,0) scale(1.1,.88)', filter: 'drop-shadow(0 0 0 #0000)', offset: .9 },
+      { transform: 'translate(0,0) scale(1)', offset: 1 },
+    ], { duration: dur, easing: 'cubic-bezier(.4,0,.2,1)' }).onfinish = () => { d.style.zIndex = ''; };
+    dust(T, dur * .88);
   };
-  slide(a.mv.from, a.mv.to);
-  if (a.rook) slide(a.rook.from, a.rook.to);
+  const F = cell(mv.from, bot), T = cell(mv.to, bot);
+  if (mv.promotion) {
+    const dest = sq(T), pb = dest.querySelector('b'), color = pb ? cor(g.b[sqIdx(mv.to)]) : 'w';
+    if (pb) pb.style.visibility = 'hidden';
+    const box = fxBox(F), fr = document.createElement('div');
+    fr.className = 'frag p' + color; fr.innerHTML = '<b>' + gl('P') + '</b>'; box.append(fr);
+    const dx = (T.c - F.c) * sz, dy = (T.r - F.r) * sz;
+    box.style.zIndex = 5;
+    box.animate([{ transform: 'translate(0,0) scale(1)' }, { transform: `translate(${dx * .5}px,${dy * .5 - sz * .15}px) scale(1.2)`, offset: .5 },
+      { transform: `translate(${dx}px,${dy}px) scale(1)` }], { duration: 300, easing: 'ease-in-out', fill: 'forwards' });
+    setTimeout(() => {
+      box.remove();
+      if (pb) {
+        pb.style.visibility = '';
+        pb.animate([{ transform: 'scale(.2) rotate(-200deg)', filter: 'brightness(3) drop-shadow(0 0 12px #ffd35a)' },
+          { transform: 'scale(1.4) rotate(10deg)', filter: 'brightness(2) drop-shadow(0 0 16px #ffd35a)', offset: .55 },
+          { transform: 'none', filter: 'none' }], { duration: 520, easing: 'cubic-bezier(.2,.8,.3,1)' });
+      }
+      burst(T, sz);
+    }, 300);
+  } else hop(mv.from, mv.to, (g.b[sqIdx(mv.to)] || '').toUpperCase() === 'N');
+  if (a.rook) hop(a.rook.from, a.rook.to, false);
   if (a.cap) shatter(a.cap, a.capSq, bot, sz);
 }
 
 function shatter(cap, sq, bot, sz) {
-  const P = cell(sq, bot), box = document.createElement('div'), DELAY = 130;
+  const P = cell(sq, bot), box = document.createElement('div'), DELAY = 280;
   box.className = 'fxs';
   box.style.left = P.c * 12.5 + '%'; box.style.top = P.r * 12.5 + '%';
   const pts = [[0, 0], [50, 0], [100, 0], [100, 50], [100, 100], [50, 100], [0, 100], [0, 50]];
@@ -173,6 +240,7 @@ function mate(winner) {
 }
 
 // ---------- ações ----------
+$('#leave').onclick = () => { location.href = '/'; };
 $('#flip').onclick = () => { flip = !flip; render(); };
 $('#cpcode').onclick = () => { navigator.clipboard.writeText(code).then(() => toast('Código copiado!')); };
 $('#copy').onclick = () => { navigator.clipboard.writeText(location.href).then(() => toast('Link copiado!')); };
@@ -229,7 +297,7 @@ function lost(c) {
 const el = (tag, txt, cls) => { const e = document.createElement(tag); e.textContent = txt; if (cls) e.className = cls; return e; };
 
 function render() {
-  const b0 = me() || 'w', bot = flip ? (b0 === 'w' ? 'b' : 'w') : b0, top = bot === 'w' ? 'b' : 'w';
+  const b0 = local && !LC.bot && !LC.auto ? 'w' : me() || 'w', bot = flip ? (b0 === 'w' ? 'b' : 'w') : b0, top = bot === 'w' ? 'b' : 'w';
   const last = S.moves[S.moves.length - 1], tg = sel ? g.targets(sel) : [];
   const chk = g.inCheck() ? sqName(g.b.indexOf(g.turn === 'w' ? 'K' : 'k')) : null;
 
@@ -262,7 +330,7 @@ function render() {
     const w = S.result.winner;
     st = (w ? (w === 'w' ? 'Brancas vencem' : 'Pretas vencem') : 'Empate') + ' — ' + WHY[S.result.reason];
   } else {
-    st = pl ? (myTurn() ? 'Sua vez' : 'Vez do oponente') : 'Vez das ' + (g.turn === 'w' ? 'brancas' : 'pretas');
+    st = pl && !local ? (myTurn() ? 'Sua vez' : 'Vez do oponente') : 'Vez das ' + (g.turn === 'w' ? 'brancas' : 'pretas');
     if (g.inCheck()) st += ' (xeque)';
     if (S.draw && S.draw === opp) st += ' — empate proposto';
   }
@@ -304,9 +372,180 @@ function tick() {
     if (!S.base) { k.textContent = '∞'; return; }
     const on = run && g.turn === c, ms = S.clock[c] - (on ? Date.now() + off - S.since : 0);
     k.textContent = fmt(ms);
+    if (local && on && ms <= 0 && !LC.flagging) { LC.flagging = true; localFlag(c); }
     k.classList.toggle('on', !!on);
     k.classList.toggle('low', ms < 2e4 && S.status !== 'waiting');
   });
 }
 setInterval(tick, 100);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Xadrez online'; });
+
+// ---------- modo local e robôs ----------
+let eng;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function startLocalGame(cfg) {
+  local = true; lg = new Chess();
+  LC = { base: 0, inc: 0, auto: false, moves: [], since: null, status: 'playing', result: null, game: 1, ...cfg };
+  LC.clock = { w: LC.base, b: LC.base };
+  document.body.classList.add('local');
+  document.body.classList.toggle('bot', !!LC.bot);
+  $('#mate').hidden = true;
+  $('#home').hidden = true; $('#game').hidden = false;
+  S = null;
+  localPush();
+}
+$('#local').onclick = () => {
+  const [min, inc] = $('#tc').value.split('+');
+  startLocalGame({ base: +min * 6e4, inc: +inc * 1e3, auto: $('#auto').checked });
+};
+
+function startBot(idx) {
+  const c = $('#bcolor').value, human = c === 'r' ? (Math.random() < 0.5 ? 'w' : 'b') : c;
+  const elo = LEVELS[idx], t = tier(idx);
+  startLocalGame({ bot: { idx, elo, name: `${t[0]} ${t[1]} (${elo})`, ...params(elo) }, human });
+}
+
+function localPush() {
+  const L = LC, B = L.bot;
+  const nm = c => (B ? (L.human === c ? 'Você' : B.name) : c === 'w' ? 'Brancas' : 'Pretas');
+  update({
+    t: 'state', you: B ? L.human : L.status === 'playing' ? lg.turn : 'w', code: 'LOCAL', base: L.base, inc: L.inc,
+    p: { w: { n: nm('w'), on: true }, b: { n: nm('b'), on: true } },
+    moves: L.moves.slice(), status: L.status, result: L.result, draw: null, rematch: {},
+    clock: { ...L.clock }, since: L.since, now: Date.now(), chat: [], spec: 0, game: L.game,
+  });
+  if (B) botTurn();
+}
+function localEnd(winner, reason) {
+  Object.assign(LC, { status: 'over', result: { winner, reason }, since: null });
+  localPush();
+  if (LC.bot && winner === LC.human) botWon();
+}
+function localFlag(c) {
+  const w = c === 'w' ? 'b' : 'w';
+  LC.clock[c] = 0;
+  if (lg.lacksMating(w)) localEnd(null, 'insufficient'); else localEnd(w, 'timeout');
+}
+function localSend(d) {
+  const L = LC, now = Date.now(), turn = lg.turn;
+  if (L.status === 'playing') {
+    if (d.t === 'move') {
+      const run = L.base > 0 && L.since;
+      if (run && now - L.since >= L.clock[turn]) return localFlag(turn);
+      const mv = lg.move(d);
+      if (!mv) return;
+      if (run) L.clock[turn] += L.inc - (now - L.since);
+      L.moves.push(mv);
+      L.since = L.base > 0 && L.moves.length >= 2 ? now : null;
+      const res = lg.result();
+      if (res.over) return localEnd(res.winner, res.reason);
+    } else if (d.t === 'resign') {
+      const loser = L.bot ? L.human : turn;
+      return localEnd(loser === 'w' ? 'b' : 'w', 'resign');
+    } else if (d.t === 'abort' && L.moves.length < 2) return localEnd(null, 'aborted');
+    else if (d.t === 'draw' && L.moves.length >= 2 && !L.bot) {
+      if (confirm('Os dois jogadores concordam com o empate?')) return localEnd(null, 'agreement');
+      return;
+    }
+  } else if (L.status === 'over' && d.t === 'rematch') {
+    lg = new Chess();
+    Object.assign(L, { moves: [], clock: { w: L.base, b: L.base }, since: null, status: 'playing', result: null, game: L.game + 1, flagging: false });
+  }
+  localPush();
+}
+
+async function botTurn() {
+  const L = LC;
+  if (!L || !L.bot || L.status !== 'playing' || lg.turn === L.human) return;
+  const tok = L.game + ':' + L.moves.length;
+  if (L.pend === tok) return;
+  L.pend = tok;
+  $('#status').textContent = 'Robô pensando…';
+  const rnd = () => {
+    const m = lg.moves(), x = m[(Math.random() * m.length) | 0];
+    return sqName(x.from) + sqName(x.to) + (x.pr || '');
+  };
+  let uci;
+  try {
+    if (Math.random() < L.bot.blunder) uci = rnd();
+    else {
+      eng = eng || new Engine();
+      uci = await Promise.race([
+        eng.best(L.moves.map(m => m.from + m.to + (m.promotion || '')), L.bot),
+        sleep(10000).then(() => { throw new Error('timeout'); }),
+      ]);
+    }
+  } catch {
+    if (!L.warned) { L.warned = true; toast('Motor do robô indisponível; jogando lances aleatórios.'); }
+    uci = rnd();
+  }
+  await sleep(350);
+  if (LC !== L || L.pend !== tok || L.status !== 'playing') return;
+  localSend({ t: 'move', from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+}
+
+function botWon() {
+  const idx = LC.bot.idx, before = bestElo();
+  let gifts = [];
+  if (idx > prog.best) { prog.best = idx; save(); gifts = SKINS.filter(s => s.at > before && s.at <= LEVELS[idx]); }
+  const nxt = idx + 1 < LEVELS.length ? idx + 1 : -1;
+  const wait = LC.result.reason === 'checkmate' ? 4200 : 900;
+  renderBots(); renderSkins();
+  setTimeout(() => reward(idx, gifts, nxt), wait);
+}
+function reward(idx, gifts, nxt) {
+  const d = $('#dlg');
+  d.innerHTML = `<p><b>Vitória!</b> Você venceu o robô de ${LEVELS[idx]}.</p>` +
+    (gifts.length ? `<p>🎁 Skin desbloqueada: <b>${gifts.map(s => s.nome).join(', ')}</b></p>` : '') +
+    (nxt >= 0 ? `<p>Próximo robô: ${LEVELS[nxt]}</p>` : '<p>Você derrotou todos os robôs!</p>') +
+    '<div class="row"><button id="rw-x">Fechar</button>' + (nxt >= 0 ? '<button class="p" id="rw-n">Próximo nível</button>' : '') + '</div>';
+  d.onclose = null;
+  d.showModal();
+  d.querySelector('#rw-x').onclick = () => d.close();
+  const n = d.querySelector('#rw-n');
+  if (n) n.onclick = () => { d.close(); startBot(nxt); };
+}
+
+// ---------- abas, robôs, skins, som ----------
+function renderBots() {
+  const L = $('#ladder'), open = Math.min(prog.best + 1, LEVELS.length - 1);
+  L.innerHTML = '';
+  $('#bprog').textContent = prog.best < 0 ? 'Vença o robô de 200 para liberar o próximo.'
+    : `Maior robô vencido: ${bestElo()}` + (prog.best + 1 < LEVELS.length ? ` — próximo: ${LEVELS[prog.best + 1]}` : ' — todos derrotados!');
+  LEVELS.forEach((elo, i) => {
+    const t = tier(i), done = i <= prog.best, lock = i > open, gift = SKINS.find(s => s.at === elo);
+    const b = document.createElement('button');
+    b.className = 'lv' + (done ? ' done' : '') + (i === open && !done ? ' now' : '');
+    b.disabled = lock;
+    b.innerHTML = `<span class="em">${t[0]}</span><b>${elo}</b><small>${lock ? '🔒' : done ? '✓ ' + t[1] : t[1]}</small>` +
+      (gift ? `<i class="gf" title="Desbloqueia a skin ${gift.nome}">🎁</i>` : '');
+    b.onclick = () => startBot(i);
+    L.append(b);
+  });
+}
+function renderSkins() {
+  const K = $('#skins');
+  K.innerHTML = '';
+  for (const s of SKINS) {
+    const ok = skinOpen(s), b = document.createElement('button');
+    b.className = 'sk' + (prog.skin === s.id ? ' on' : '');
+    b.disabled = !ok;
+    b.innerHTML = `<div class="pv" data-skin="${s.id}"><span class="l pw"><b>${gl('K')}</b></span><span class="d pb"><b>${gl('N')}</b></span>` +
+      `<span class="d pw"><b>${gl('N')}</b></span><span class="l pb"><b>${gl('K')}</b></span></div><strong>${s.nome}</strong>` +
+      `<small>${ok ? (prog.skin === s.id ? 'Equipada' : 'Equipar') : '🔒 Vença o robô de ' + s.at}</small>`;
+    b.onclick = () => { applySkin(s.id); renderSkins(); };
+    K.append(b);
+  }
+}
+document.querySelectorAll('#nav button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
+    for (const t of ['play', 'bots', 'skins']) $('#sec-' + t).hidden = t !== b.dataset.tab;
+  };
+});
+renderBots(); renderSkins();
+
+const mb = $('#mute'), mlabel = () => { mb.textContent = muted() ? '🔇 Som' : '🔊 Som'; };
+mlabel();
+mb.onclick = () => { setMute(!muted()); mlabel(); };

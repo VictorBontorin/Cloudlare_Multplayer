@@ -11,6 +11,8 @@
 
 <main id="home">
   <h1>Xadrez</h1>
+  <nav id="nav"><button data-tab="play" class="on">Jogar</button><button data-tab="bots">Robôs</button><button data-tab="skins">Skins</button></nav>
+  <section id="sec-play">
   <p class="mt">Crie uma partida, mande o link e jogue em tempo real. Sem cadastro.</p>
   <div class="card">
     <input id="name" placeholder="Seu nome" maxlength="20" autocomplete="nickname">
@@ -34,11 +36,26 @@
     <button class="p" id="create">Criar partida</button>
   </div>
   <div class="card">
+    <button id="local">Jogar local (2 jogadores no mesmo dispositivo)</button>
+    <label class="chk"><input type="checkbox" id="auto"> Virar o tabuleiro a cada lance</label>
+  </div>
+  <div class="card">
     <div class="row">
       <input id="code" placeholder="Código da sala" maxlength="6" autocapitalize="characters">
       <button id="join">Entrar</button>
     </div>
   </div>
+  </section>
+  <section id="sec-bots" hidden>
+    <p class="mt" id="bprog"></p>
+    <div class="card"><select id="bcolor" aria-label="Cor"><option value="r">Cor aleatória</option><option value="w">Jogar de brancas</option><option value="b">Jogar de pretas</option></select></div>
+    <div id="ladder"></div>
+    <p class="mt small">Do robô de 1320 para cima, a força é limitada pelo Stockfish na escala de Elo dele (calibrada na lista CCRL). Abaixo disso o valor é aproximado: o robô erra de propósito.</p>
+  </section>
+  <section id="sec-skins" hidden>
+    <p class="mt">Derrote robôs para desbloquear skins. Escolha uma para jogar com ela.</p>
+    <div id="skins"></div>
+  </section>
 </main>
 
 <main id="game" hidden>
@@ -52,6 +69,8 @@
     <div id="status"></div>
     <div id="moves"></div>
     <div class="btns">
+      <button id="leave">Sair</button>
+      <button id="mute">🔊 Som</button>
       <button id="flip" title="Virar o tabuleiro">Virar</button>
       <button id="copy">Copiar link</button>
       <button id="draw" hidden>Propor empate</button>
