@@ -22,6 +22,18 @@ export default {
       return json({ error: 'Não foi possível criar a sala.' }, 500);
     }
 
+    const um = p.match(/^\/api\/u\/(register|login|me|save|game|logout)$/);
+    if (um && req.method === 'POST') {
+      const d = await req.json().catch(() => ({})), act = um[1], auth = act === 'register' || act === 'login';
+      const name = String(auth ? d.user || '' : String(d.token || '').split('.')[0]);
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(name))
+        return json({ error: auth ? 'Usuário inválido (3 a 20 letras, números ou _).' : 'Sessão inválida.' }, auth ? 400 : 401);
+      if (auth && (typeof d.pass !== 'string' || d.pass.length < 6 || d.pass.length > 100))
+        return json({ error: 'A senha precisa ter de 6 a 100 caracteres.' }, 400);
+      const stub = env.USER.get(env.USER.idFromName(name.toLowerCase()));
+      return stub.fetch('https://user/' + act, { method: 'POST', body: JSON.stringify({ ...d, user: name }) });
+    }
+
     const ws = p.match(/^\/ws\/([A-Z0-9]{6})$/);
     if (ws) {
       if (req.headers.get('Upgrade') !== 'websocket') return new Response('Esperado WebSocket', { status: 426 });
@@ -210,5 +222,65 @@ export class ChessRoom extends DurableObject {
       return;
     }
     await this.commit();
+  }
+}
+
+// ---------- contas: uma instância por usuário (senha com PBKDF2, sessões por token) ----------
+const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+const unhex = h => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
+async function pbk(pass, salt) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
+  return hex(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100000 }, k, 256));
+}
+const sha = async t => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)));
+
+export class UserStore extends DurableObject {
+  async session(u) {
+    const token = u.name + '.' + hex(crypto.getRandomValues(new Uint8Array(24)));
+    u.sess = [...(u.sess || []), await sha(token)].slice(-8);
+    await this.ctx.storage.put('u', u);
+    return json({ token, user: u.name });
+  }
+
+  async fetch(req) {
+    const act = new URL(req.url).pathname.slice(1), d = await req.json().catch(() => ({})), st = this.ctx.storage;
+    let u = await st.get('u');
+
+    if (act === 'register') {
+      if (u) return json({ error: 'Esse usuário já existe.' }, 409);
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      u = { name: d.user, salt: hex(salt), hash: await pbk(d.pass, salt), prog: {}, sess: [] };
+      return this.session(u);
+    }
+    if (act === 'login') {
+      if (!u || (await pbk(d.pass, unhex(u.salt))) !== u.hash) return json({ error: 'Usuário ou senha incorretos.' }, 401);
+      return this.session(u);
+    }
+    if (!u || !u.sess.includes(await sha(String(d.token || '')))) return json({ error: 'Sessão expirada. Entre novamente.' }, 401);
+
+    if (act === 'me') {
+      const games = [...(await st.list({ prefix: 'g:' })).values()].reverse();
+      return json({ prog: u.prog, games });
+    }
+    if (act === 'save') {
+      if (d.prog && typeof d.prog === 'object') u.prog = d.prog;
+      await st.put('u', u);
+      return json({ ok: 1 });
+    }
+    if (act === 'game') {
+      const g = d.game;
+      if (!g || !Number.isFinite(g.id) || JSON.stringify(g).length > 100000) return json({ error: 'Partida inválida.' }, 400);
+      await st.put('g:' + String(g.id).padStart(16, '0'), g);
+      const keys = [...(await st.list({ prefix: 'g:' })).keys()];
+      if (keys.length > 40) await st.delete(keys.slice(0, keys.length - 40));
+      return json({ ok: 1 });
+    }
+    if (act === 'logout') {
+      const h = await sha(String(d.token));
+      u.sess = u.sess.filter(x => x !== h);
+      await st.put('u', u);
+      return json({ ok: 1 });
+    }
+    return json({ error: 'Rota inválida.' }, 404);
   }
 }
