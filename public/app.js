@@ -1,10 +1,11 @@
 import { Chess, sqName, sqIdx } from '/chess.js';
 import { play, muted, setMute } from '/sound.js';
-import { LEVELS, tier, params, Engine, SKINS, prog, save, bestElo, skinOpen, applySkin } from '/bot.js';
+import { LEVELS, tier, params, Engine, SKINS, prog, save, bestElo, skinOpen, glyph, pskin, setBoard, setPiece, setAllPieces, replaceProg, hooks } from '/bot.js';
+import { openAnalysis } from '/analysis.js';
 
 const $ = s => document.querySelector(s);
-const G = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
-const gl = p => G[p.toUpperCase()] + '\uFE0E';
+const gl = glyph;
+const bt = p => `<b data-ps="${pskin(p)}">${glyph(p)}</b>`;
 const V = { Q: 9, R: 5, B: 3, N: 3, P: 1 }, N0 = { Q: 1, R: 2, B: 2, N: 2, P: 8 };
 const FILES = 'abcdefgh';
 const WHY = {
@@ -13,7 +14,7 @@ const WHY = {
   timeout: 'tempo esgotado', agreement: 'acordo', aborted: 'partida abortada',
 };
 
-let ws, S, g, code, off = 0, sel = null, flip = false, chatN = 0, anim = null, local = false, lg, LC;
+let ws, S, g, code, off = 0, sel = null, flip = false, chatN = 0, anim = null, local = false, lg, LC, lastGame = null;
 const cor = p => (p < 'a' ? 'w' : 'b');
 const me = () => (S.you === 'w' || S.you === 'b' ? S.you : null);
 const myTurn = () => S.status === 'playing' && me() === g.turn;
@@ -100,6 +101,7 @@ function update(d) {
   if (old && old.status === 'playing' && d.status === 'over') {
     const w = d.result.winner, m = local && !LC.bot ? null : me();
     play(w && m ? (w === m ? 'win' : 'lose') : 'end', doMate ? 2400 : anim ? 600 : 100);
+    if (d.moves.length >= 2 && (local || me())) { lastGame = gameRecord(d); putGame(lastGame); }
   }
   render();
   if (doMate) setTimeout(() => mate(d.result.winner), delay);
@@ -165,7 +167,7 @@ function playAnim(a, bot) {
     const dest = sq(T), pb = dest.querySelector('b'), color = pb ? cor(g.b[sqIdx(mv.to)]) : 'w';
     if (pb) pb.style.visibility = 'hidden';
     const box = fxBox(F), fr = document.createElement('div');
-    fr.className = 'frag p' + color; fr.innerHTML = '<b>' + gl('P') + '</b>'; box.append(fr);
+    fr.className = 'frag p' + color; fr.innerHTML = bt('P'); box.append(fr);
     const dx = (T.c - F.c) * sz, dy = (T.r - F.r) * sz;
     box.style.zIndex = 5;
     box.animate([{ transform: 'translate(0,0) scale(1)' }, { transform: `translate(${dx * .5}px,${dy * .5 - sz * .15}px) scale(1.2)`, offset: .5 },
@@ -194,7 +196,7 @@ function shatter(cap, sq, bot, sz) {
   pts.forEach((p, i) => {
     const q = pts[(i + 1) % 8], f = document.createElement('div');
     f.className = 'frag p' + cor(cap);
-    f.innerHTML = '<b>' + gl(cap) + '</b>';
+    f.innerHTML = bt(cap);
     f.style.clipPath = `polygon(${cx}% ${cy}%,${p[0]}% ${p[1]}%,${q[0]}% ${q[1]}%)`;
     const mx = (p[0] + q[0]) / 2 - cx, my = (p[1] + q[1]) / 2 - cy, L = Math.hypot(mx, my) || 1;
     const dist = sz * (0.7 + Math.random() * 0.8);
@@ -264,7 +266,7 @@ function promo(c) {
     d.innerHTML = '<p>Promover para:</p><div class="row"></div>';
     for (const k of 'QRBN') {
       const b = document.createElement('button');
-      b.className = 'pp p' + c; b.textContent = gl(k);
+      b.className = 'pp p' + c; b.innerHTML = bt(k);
       b.onclick = () => { d.close(); res(k.toLowerCase()); };
       d.querySelector('.row').append(b);
     }
@@ -308,7 +310,7 @@ function render() {
     d.className = 'sq ' + ((r + f) % 2 ? 'd' : 'l') + (p ? ' p' + cor(p) : '') + (n === sel ? ' sel' : '') +
       (last && (n === last.from || n === last.to) ? ' lm' : '') + (n === chk ? ' ck' : '') +
       (tg.some(t => t.to === n) ? (p ? ' tc' : ' t') : '');
-    d.innerHTML = (p ? '<b>' + gl(p) + '</b>' : '') + ((i & 7) === 0 ? '<i class="rk">' + (8 - r) + '</i>' : '') +
+    d.innerHTML = (p ? bt(p) : '') + ((i & 7) === 0 ? '<i class="rk">' + (8 - r) + '</i>' : '') +
       (i >> 3 === 7 ? '<i class="fl">' + FILES[f] + '</i>' : '');
     d.onclick = () => click(n);
     B.append(d);
@@ -342,6 +344,7 @@ function render() {
   $('#resign').hidden = !(pl && playing);
   $('#resign').textContent = S.moves.length < 2 ? 'Abortar' : 'Desistir';
   $('#rematch').hidden = !(pl && over);
+  $('#analyze').hidden = !(over && S.moves.length >= 2 && (pl || local));
   $('#rematch').textContent = S.rematch[me()] ? 'Aguardando revanche…' : S.rematch[opp] ? 'Aceitar revanche' : 'Revanche';
   $('#spec').textContent = S.spec ? S.spec + (S.spec > 1 ? ' espectadores' : ' espectador') : '';
 
@@ -524,27 +527,151 @@ function renderBots() {
     L.append(b);
   });
 }
+// ---------- skins (tabuleiro e peças separados) ----------
+const SK = id => SKINS.find(s => s.id === id) || SKINS[0];
+const PT = [['K', 'Rei'], ['Q', 'Dama'], ['R', 'Torre'], ['B', 'Bispo'], ['N', 'Cavalo'], ['P', 'Peão']];
+const cellP = (cls, sk, t) => `<span class="${cls}"><b data-ps="${sk}">${SK(sk).set[t]}</b></span>`;
+const hint = (ok, on, s) => (ok ? (on ? 'Em uso' : 'Usar') : '🔒 Vença o robô de ' + s.at);
+
 function renderSkins() {
   const K = $('#skins');
   K.innerHTML = '';
+  const title = t => K.append(el('h3', t));
+  const grid = () => { const d = document.createElement('div'); d.className = 'skg'; K.append(d); return d; };
+
+  title('Tabuleiro');
+  let G = grid();
   for (const s of SKINS) {
     const ok = skinOpen(s), b = document.createElement('button');
-    b.className = 'sk' + (prog.skin === s.id ? ' on' : '');
-    b.disabled = !ok;
-    b.innerHTML = `<div class="pv" data-skin="${s.id}"><span class="l pw"><b>${gl('K')}</b></span><span class="d pb"><b>${gl('N')}</b></span>` +
-      `<span class="d pw"><b>${gl('N')}</b></span><span class="l pb"><b>${gl('K')}</b></span></div><strong>${s.nome}</strong>` +
-      `<small>${ok ? (prog.skin === s.id ? 'Equipada' : 'Equipar') : '🔒 Vença o robô de ' + s.at}</small>`;
-    b.onclick = () => { applySkin(s.id); renderSkins(); };
-    K.append(b);
+    b.className = 'sk' + (prog.board === s.id ? ' on' : ''); b.disabled = !ok;
+    b.innerHTML = `<div class="pv" data-board="${s.id}"><span class="l"></span><span class="d"></span><span class="d"></span><span class="l"></span></div><strong>${s.nome}</strong><small>${hint(ok, prog.board === s.id, s)}</small>`;
+    b.onclick = () => { setBoard(s.id); renderSkins(); };
+    G.append(b);
+  }
+
+  title('Peças: aplicar um conjunto em todas');
+  G = grid();
+  for (const s of SKINS) {
+    const ok = skinOpen(s), b = document.createElement('button'), all = PT.every(([t]) => prog.pieces[t] === s.id);
+    b.className = 'sk' + (all ? ' on' : ''); b.disabled = !ok;
+    b.innerHTML = `<div class="pv">${cellP('l pw', s.id, 'K')}${cellP('d pb', s.id, 'K')}${cellP('d pw', s.id, 'N')}${cellP('l pb', s.id, 'N')}</div><strong>${s.nome}</strong><small>${hint(ok, all, s)}</small>`;
+    b.onclick = () => { setAllPieces(s.id); renderSkins(); };
+    G.append(b);
+  }
+
+  title('Peças: escolher uma por uma');
+  for (const [t, nome] of PT) {
+    const row = document.createElement('div'), sel = document.createElement('select'), pv = document.createElement('div');
+    row.className = 'prow'; pv.className = 'pv pv2';
+    for (const s of SKINS) {
+      const o = document.createElement('option');
+      o.value = s.id; o.textContent = s.nome + (skinOpen(s) ? '' : ' 🔒'); o.disabled = !skinOpen(s);
+      sel.append(o);
+    }
+    sel.value = prog.pieces[t];
+    pv.innerHTML = cellP('l pw', prog.pieces[t], t) + cellP('d pb', prog.pieces[t], t);
+    sel.onchange = () => { setPiece(t, sel.value); renderSkins(); };
+    row.append(el('span', nome, 'n'), sel, pv);
+    K.append(row);
   }
 }
-document.querySelectorAll('#nav button').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
-    for (const t of ['play', 'bots', 'skins']) $('#sec-' + t).hidden = t !== b.dataset.tab;
+
+// ---------- abas ----------
+const TABS = ['play', 'bots', 'skins', 'an', 'acc'];
+function tab(n) {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === n));
+  for (const t of TABS) $('#sec-' + t).hidden = t !== n;
+  if (n === 'an') renderGames();
+}
+document.querySelectorAll('#nav button').forEach(b => { b.onclick = () => tab(b.dataset.tab); });
+
+// ---------- partidas salvas e análise ----------
+const GK = 'xadrez_games';
+const getGames = () => { try { return JSON.parse(localStorage[GK] || '[]'); } catch { return []; } };
+const putGame = g => {
+  const L = getGames().filter(x => x.id !== g.id);
+  L.unshift(g);
+  localStorage[GK] = JSON.stringify(L.slice(0, 30));
+  if (auth.token) api('game', { game: g }).catch(() => {});
+};
+function gameRecord(d) {
+  const c = local && !LC.bot ? 'w' : me() || 'w';
+  return {
+    id: Date.now(), date: new Date().toISOString(), mode: local ? (LC.bot ? 'bot' : 'local') : 'online',
+    opp: local ? (LC.bot ? LC.bot.name : 'Local') : (d.p[c === 'w' ? 'b' : 'w'] || { n: '?' }).n,
+    color: c, result: d.result,
+    moves: d.moves.map(x => ({ from: x.from, to: x.to, san: x.san, promotion: x.promotion })),
   };
-});
-renderBots(); renderSkins();
+}
+function renderGames() {
+  const L = $('#alist'), gs = getGames();
+  L.innerHTML = '';
+  if (!gs.length) { L.append(el('p', 'Nenhuma partida salva ainda. Jogue uma e ela aparece aqui.', 'mt')); return; }
+  for (const g of gs) {
+    const w = g.result && g.result.winner, res = !w ? 'Empate' : w === g.color ? 'Vitória' : 'Derrota';
+    const b = document.createElement('button');
+    b.className = 'gm';
+    b.append(el('b', res + ' · ' + (g.mode === 'local' ? 'Partida local' : 'contra ' + g.opp)),
+      el('small', new Date(g.date).toLocaleString('pt-BR') + ' · ' + g.moves.length + ' lances' + (g.an ? ' · analisada' : '')));
+    b.onclick = () => openAnalysis(g, { save: putGame });
+    L.append(b);
+  }
+}
+$('#analyze').onclick = () => {
+  const gm = lastGame && lastGame.moves.length === S.moves.length ? lastGame : gameRecord(S);
+  $('#game').hidden = true; $('#home').hidden = false;
+  tab('an');
+  openAnalysis(gm, { save: putGame, back: () => { $('#home').hidden = true; $('#game').hidden = false; } });
+};
+
+// ---------- conta ----------
+const auth = { token: localStorage.tk || '', user: localStorage.tu || '' };
+async function api(a, body) {
+  const r = await fetch('/api/u/' + a, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, token: auth.token }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || 'Erro de conexão.'); e.status = r.status; throw e; }
+  return j;
+}
+const clearAuth = () => { auth.token = auth.user = ''; localStorage.removeItem('tk'); localStorage.removeItem('tu'); };
+function accUI() {
+  $('#acc-out').hidden = !!auth.user; $('#acc-in').hidden = !auth.user;
+  $('#aname').textContent = auth.user;
+  document.querySelector('#nav [data-tab=acc]').textContent = auth.user ? '👤 ' + auth.user : 'Conta';
+}
+async function syncDown() {
+  const j = await api('me', {}), s = j.prog || {};
+  if ((s.best ?? -1) >= prog.best) replaceProg({ ...prog, ...s }); else save();
+  const have = new Set((j.games || []).map(g => g.id)), loc = getGames(), mine = loc.filter(g => !have.has(g.id));
+  localStorage[GK] = JSON.stringify([...(j.games || []), ...mine].sort((a, b) => b.id - a.id).slice(0, 30));
+  for (const g of mine.slice(0, 10)) api('game', { game: g }).catch(() => {});
+  renderBots(); renderSkins(); renderGames();
+}
+async function enter(a) {
+  $('#amsg').textContent = '…';
+  try {
+    const j = await api(a, { user: $('#au').value.trim(), pass: $('#ap').value });
+    auth.token = j.token; auth.user = j.user;
+    localStorage.tk = j.token; localStorage.tu = j.user;
+    $('#ap').value = ''; $('#amsg').textContent = '';
+    await syncDown(); accUI();
+    toast('Bem-vindo, ' + j.user + '!');
+  } catch (e) { $('#amsg').textContent = e.message; }
+}
+$('#alogin').onclick = () => enter('login');
+$('#areg').onclick = () => enter('register');
+$('#alogout').onclick = async () => {
+  try { await api('logout', {}); } catch {}
+  clearAuth(); accUI(); toast('Você saiu da conta.');
+};
+let pushT;
+hooks.push = () => {
+  if (!auth.token) return;
+  clearTimeout(pushT);
+  pushT = setTimeout(() => api('save', { prog }).catch(() => {}), 800);
+};
+
+renderBots(); renderSkins(); accUI();
+if (auth.token) syncDown().catch(e => { if (e.status === 401) clearAuth(); }).finally(accUI);
 
 const mb = $('#mute'), mlabel = () => { mb.textContent = muted() ? '🔇 Som' : '🔊 Som'; };
 mlabel();

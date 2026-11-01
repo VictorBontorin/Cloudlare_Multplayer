@@ -28,6 +28,23 @@ export class Engine {
       if (!wait) res();
     });
   }
+  async analyse(moves, depth = 12) {
+    await this.ready;
+    await this.cmd('setoption name UCI_LimitStrength value false');
+    await this.cmd('setoption name MultiPV value 2');
+    await this.cmd('position startpos' + (moves.length ? ' moves ' + moves.join(' ') : ''));
+    const lines = {};
+    const best = await new Promise(res => {
+      this.on = l => {
+        if (l.startsWith('info') && l.includes(' pv ')) {
+          const mp = +(l.match(/multipv (\d+)/) || [0, 1])[1], c = l.match(/score cp (-?\d+)/), m = l.match(/score mate (-?\d+)/), pv = l.match(/ pv (\S+)/);
+          lines[mp] = { cp: c ? +c[1] : null, mate: m ? +m[1] : null, mv: pv[1] };
+        } else if (l.startsWith('bestmove')) { this.on = null; res(l.split(' ')[1]); }
+      };
+      this.w.postMessage('go depth ' + depth);
+    });
+    return { best, lines: [lines[1], lines[2]].filter(Boolean) };
+  }
   async best(moves, p) {
     await this.ready;
     await this.cmd('setoption name UCI_LimitStrength value true');
@@ -38,24 +55,42 @@ export class Engine {
   }
 }
 
+const V = x => x + '\uFE0E';
+const FILLED = { K: V('♚'), Q: V('♛'), R: V('♜'), B: V('♝'), N: V('♞'), P: V('♟') };
+const HOLLOW = { K: V('♔'), Q: V('♕'), R: V('♖'), B: V('♗'), N: V('♘'), P: V('♙') };
+const DRAGON = { K: '👑', Q: '🔥', R: '🏯', B: '🧙', N: '🐉', P: '🥚' };
 export const SKINS = [
-  { id: 'classico', nome: 'Clássico', at: 0 },
-  { id: 'madeira', nome: 'Madeira', at: 600 },
-  { id: 'oceano', nome: 'Oceano', at: 1000 },
-  { id: 'neon', nome: 'Neon', at: 1400 },
-  { id: 'marmore', nome: 'Mármore', at: 1800 },
-  { id: 'ouro', nome: 'Ouro Real', at: 2200 },
-  { id: 'obsidiana', nome: 'Obsidiana', at: 2600 },
-  { id: 'dragao', nome: 'Dragão', at: 3000 },
+  { id: 'classico', nome: 'Clássico', at: 0, set: FILLED },
+  { id: 'madeira', nome: 'Madeira', at: 600, set: FILLED },
+  { id: 'oceano', nome: 'Oceano', at: 1000, set: HOLLOW },
+  { id: 'neon', nome: 'Neon', at: 1400, set: HOLLOW },
+  { id: 'marmore', nome: 'Mármore', at: 1800, set: FILLED },
+  { id: 'ouro', nome: 'Ouro Real', at: 2200, set: FILLED },
+  { id: 'obsidiana', nome: 'Obsidiana', at: 2600, set: FILLED },
+  { id: 'dragao', nome: 'Dragão', at: 3000, set: DRAGON },
 ];
-
-const KEY = 'xadrez_prog';
+const find = id => SKINS.find(s => s.id === id) || SKINS[0];
+const KEY = 'xadrez_prog', TYPES = ['K', 'Q', 'R', 'B', 'N', 'P'];
+const DEF = () => ({ best: -1, board: 'classico', pieces: { K: 'classico', Q: 'classico', R: 'classico', B: 'classico', N: 'classico', P: 'classico' } });
 export const prog = (() => {
-  try { return { best: -1, skin: 'classico', ...JSON.parse(localStorage[KEY] || '{}') }; }
-  catch { return { best: -1, skin: 'classico' }; }
+  try {
+    const o = JSON.parse(localStorage[KEY] || '{}'), d = DEF();
+    return { ...d, ...o, pieces: { ...d.pieces, ...(o.pieces || {}) } };
+  } catch { return DEF(); }
 })();
-export const save = () => { localStorage[KEY] = JSON.stringify(prog); };
+export const hooks = { push: null };
+const paint = () => { document.documentElement.dataset.board = find(prog.board).id; };
+export const save = () => { localStorage[KEY] = JSON.stringify(prog); if (hooks.push) hooks.push(); };
+export const replaceProg = o => {
+  const d = DEF();
+  Object.assign(prog, d, o, { pieces: { ...d.pieces, ...(o.pieces || {}) } });
+  localStorage[KEY] = JSON.stringify(prog); paint();
+};
 export const bestElo = () => (prog.best < 0 ? 0 : LEVELS[prog.best]);
 export const skinOpen = s => s.at === 0 || bestElo() >= s.at;
-export const applySkin = id => { prog.skin = id; document.documentElement.dataset.skin = id; save(); };
-document.documentElement.dataset.skin = SKINS.some(s => s.id === prog.skin) ? prog.skin : 'classico';
+export const glyph = p => find(prog.pieces[p.toUpperCase()]).set[p.toUpperCase()];
+export const pskin = p => find(prog.pieces[p.toUpperCase()]).id;
+export const setBoard = id => { prog.board = id; paint(); save(); };
+export const setPiece = (t, id) => { prog.pieces[t] = id; save(); };
+export const setAllPieces = id => { for (const t of TYPES) prog.pieces[t] = id; save(); };
+paint();

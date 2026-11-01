@@ -11,7 +11,7 @@
 
 <main id="home">
   <h1>Xadrez</h1>
-  <nav id="nav"><button data-tab="play" class="on">Jogar</button><button data-tab="bots">Robôs</button><button data-tab="skins">Skins</button></nav>
+  <nav id="nav"><button data-tab="play" class="on">Jogar</button><button data-tab="bots">Robôs</button><button data-tab="skins">Skins</button><button data-tab="an">Análise</button><button data-tab="acc">Conta</button></nav>
   <section id="sec-play">
   <p class="mt">Crie uma partida, mande o link e jogue em tempo real. Sem cadastro.</p>
   <div class="card">
@@ -52,6 +52,25 @@
     <div id="ladder"></div>
     <p class="mt small">Do robô de 1320 para cima, a força é limitada pelo Stockfish na escala de Elo dele (calibrada na lista CCRL). Abaixo disso o valor é aproximado: o robô erra de propósito.</p>
   </section>
+  <section id="sec-an" hidden>
+    <p class="mt">Suas últimas partidas. Escolha uma para ver cada lance classificado pelo Stockfish.</p>
+    <div id="alist"></div>
+    <div id="aview" hidden></div>
+  </section>
+  <section id="sec-acc" hidden>
+    <div class="card" id="acc-out">
+      <p class="mt">Entre para salvar progresso, skins e partidas, e continuar de onde parou em outro dispositivo.</p>
+      <input id="au" placeholder="Usuário (3 a 20: letras, números e _)" maxlength="20" autocomplete="username">
+      <input id="ap" type="password" placeholder="Senha (mínimo 6)" autocomplete="current-password">
+      <div class="row"><button class="p" id="alogin">Entrar</button><button id="areg">Criar conta</button></div>
+      <small id="amsg" class="mt"></small>
+    </div>
+    <div class="card" id="acc-in" hidden>
+      <p>Conectado como <b id="aname"></b></p>
+      <p class="mt">Progresso, skins e partidas são salvos automaticamente.</p>
+      <button id="alogout">Sair da conta</button>
+    </div>
+  </section>
   <section id="sec-skins" hidden>
     <p class="mt">Derrote robôs para desbloquear skins. Escolha uma para jogar com ela.</p>
     <div id="skins"></div>
@@ -70,6 +89,7 @@
     <div id="moves"></div>
     <div class="btns">
       <button id="leave">Sair</button>
+      <button id="analyze" hidden>Analisar partida</button>
       <button id="mute">🔊 Som</button>
       <button id="flip" title="Virar o tabuleiro">Virar</button>
       <button id="copy">Copiar link</button>
