@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Chess } from '../public/chess.js';
+import { TITLE_TEXT } from '../public/events.js';
 
 const ALFA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const DAY = 864e5;
@@ -100,7 +101,7 @@ export class ChessRoom extends DurableObject {
 
   state(ws) {
     const s = this.s, L = this.live();
-    const pv = r => s.p[r] && { n: s.p[r].name, on: L.some(w => this.who(w) === r) };
+    const pv = r => s.p[r] && { n: s.p[r].name, t: s.p[r].title || '', on: L.some(w => this.who(w) === r) };
     return JSON.stringify({
       t: 'state', you: this.who(ws), code: s.code, base: s.base, inc: s.inc,
       p: { w: pv('w'), b: pv('b') }, moves: s.moves, status: s.status, result: s.result,
@@ -131,13 +132,14 @@ export class ChessRoom extends DurableObject {
 
     if (d.t === 'join') {
       const name = String(d.name || '').trim().slice(0, 20) || 'Anônimo';
+      const title = TITLE_TEXT[d.title] ? d.title : '';
       const other = s.first === 'w' ? 'b' : 'w';
       let tok = typeof d.token === 'string' ? d.token : null;
-      if (tok && s.p.w && s.p.w.token === tok) s.p.w.name = name;
-      else if (tok && s.p.b && s.p.b.token === tok) s.p.b.name = name;
+      if (tok && s.p.w && s.p.w.token === tok) { s.p.w.name = name; s.p.w.title = title; }
+      else if (tok && s.p.b && s.p.b.token === tok) { s.p.b.name = name; s.p.b.title = title; }
       else {
         const free = !s.p[s.first] ? s.first : !s.p[other] ? other : null;
-        if (free) { tok = crypto.randomUUID(); s.p[free] = { token: tok, name }; } else tok = null;
+        if (free) { tok = crypto.randomUUID(); s.p[free] = { token: tok, name, title }; } else tok = null;
       }
       ws.serializeAttachment({ token: tok, name, j: 1 });
       if (s.p.w && s.p.b && s.status === 'waiting') s.status = 'playing';
