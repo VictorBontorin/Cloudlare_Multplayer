@@ -1,11 +1,13 @@
 import { Chess, sqName, sqIdx } from '/chess.js';
 import { play, muted, setMute } from '/sound.js';
-import { LEVELS, tier, params, Engine, SKINS, prog, save, bestElo, skinOpen, glyph, pskin, setBoard, setPiece, setAllPieces, replaceProg, hooks } from '/bot.js';
-import { openAnalysis } from '/analysis.js';
+import { LEVELS, tier, params, Engine, SKINS, prog, save, bestElo, skinOpen, setBoard, setPiece, setAllPieces, replaceProg, hooks } from '/bot.js';
+import { openAnalysis, parsePgn, draw } from '/analysis.js';
+import { pieceSVG } from '/pieces.js';
+import { TITLE_TEXT } from '/events.js';
+import { renderProfile, checkAwards, eventWin, grant } from '/profile.js';
 
 const $ = s => document.querySelector(s);
-const gl = glyph;
-const bt = p => `<b data-ps="${pskin(p)}">${glyph(p)}</b>`;
+const bt = p => pieceSVG(p);
 const V = { Q: 9, R: 5, B: 3, N: 3, P: 1 }, N0 = { Q: 1, R: 2, B: 2, N: 2, P: 8 };
 const FILES = 'abcdefgh';
 const WHY = {
@@ -27,7 +29,7 @@ function toast(t) {
 }
 
 // ---------- home ----------
-$('#name').value = localStorage.nome || '';
+$('#name').value = localStorage.tu || localStorage.nome || '';
 const saveName = () => { localStorage.nome = $('#name').value.trim() || 'Anônimo'; };
 $('#create').onclick = async () => {
   saveName();
@@ -60,7 +62,7 @@ function connect(c) {
 function open() {
   const tk = 'tk_' + code;
   ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/' + code);
-  ws.onopen = () => send({ t: 'join', name: localStorage.nome || 'Anônimo', token: localStorage[tk] });
+  ws.onopen = () => send({ t: 'join', name: localStorage.nome || 'Anônimo', token: localStorage[tk], title: prog.title });
   ws.onmessage = e => {
     if (e.data === 'pong') return;
     const d = JSON.parse(e.data);
@@ -123,6 +125,7 @@ function fxBox(P, extra = '') {
 }
 
 function dust(P, delay) {
+  if (still()) return;
   const box = fxBox(P), r = document.createElement('div');
   r.className = 'dust'; box.append(r);
   r.animate([{ transform: 'scale(.3)', opacity: 0.7 }, { transform: 'scale(1.35)', opacity: 0 }], { duration: 380, delay, fill: 'both' });
@@ -130,6 +133,7 @@ function dust(P, delay) {
 }
 
 function burst(P, sz) {
+  if (still()) return;
   const box = fxBox(P), ring = document.createElement('div');
   ring.className = 'ring'; box.append(ring);
   ring.animate([{ transform: 'scale(.2)', opacity: 1 }, { transform: 'scale(2.1)', opacity: 0 }], { duration: 600, fill: 'both' });
@@ -144,27 +148,36 @@ function burst(P, sz) {
 }
 
 function playAnim(a, bot) {
-  if (still()) return;
-  const B = $('#board'), sz = B.clientWidth / 8, mv = a.mv;
+  const calm = still(), B = $('#board'), sz = B.clientWidth / 8, mv = a.mv;
   const sq = P => B.children[P.r * 8 + P.c];
-  const hop = (from, to, knight) => {
-    const F = cell(from, bot), T = cell(to, bot), d = sq(T), b = d.querySelector('b');
-    if (!b) return;
-    const dx = (F.c - T.c) * sz, dy = (F.r - T.r) * sz, up = knight ? -sz * .5 : -sz * .12, big = knight ? 1.35 : 1.15, dur = knight ? 420 : 340;
+  const hop = (from, to, kind) => {
+    const F = cell(from, bot), T = cell(to, bot), d = sq(T), p = d.querySelector('.pc');
+    if (!p) return;
+    const dx = (F.c - T.c) * sz, dy = (F.r - T.r) * sz;
     d.style.zIndex = 6;
-    b.animate([
-      { transform: `translate(${dx}px,${dy}px) scale(1)`, filter: 'drop-shadow(0 0 0 #0000)', offset: 0 },
-      { transform: `translate(${dx * .8}px,${dy * .8 + up * .5}px) scale(${big})`, filter: 'drop-shadow(0 10px 6px #0006)', offset: .2 },
-      { transform: `translate(${dx * .4}px,${dy * .4 + up}px) scale(${big})`, filter: 'drop-shadow(0 12px 7px #0005)', offset: .5 },
-      { transform: `translate(0,${up * .3}px) scale(${big * .98})`, filter: 'drop-shadow(0 8px 5px #0005)', offset: .8 },
-      { transform: 'translate(0,0) scale(1.1,.88)', filter: 'drop-shadow(0 0 0 #0000)', offset: .9 },
-      { transform: 'translate(0,0) scale(1)', offset: 1 },
-    ], { duration: dur, easing: 'cubic-bezier(.4,0,.2,1)' }).onfinish = () => { d.style.zIndex = ''; };
-    dust(T, dur * .88);
+    let k, dur;
+    if (kind === 'P' || calm) { // movimento leve: só desliza, com um respiro de escala no meio
+      dur = calm ? 170 : 240;
+      k = [{ transform: `translate(${dx}px,${dy}px) scale(1)` },
+        { transform: `translate(${dx * .5}px,${dy * .5}px) scale(${calm ? 1 : 1.07})`, offset: .5 },
+        { transform: 'translate(0,0) scale(1)' }];
+    } else {
+      const kn = kind === 'N', up = kn ? -sz * .5 : -sz * .12, big = kn ? 1.35 : 1.15;
+      dur = kn ? 420 : 340;
+      k = [
+        { transform: `translate(${dx}px,${dy}px) scale(1)`, offset: 0 },
+        { transform: `translate(${dx * .8}px,${dy * .8 + up * .5}px) scale(${big})`, offset: .2 },
+        { transform: `translate(${dx * .4}px,${dy * .4 + up}px) scale(${big})`, offset: .5 },
+        { transform: `translate(0,${up * .3}px) scale(${big * .98})`, offset: .8 },
+        { transform: 'translate(0,0) scale(1.1,.88)', offset: .9 },
+        { transform: 'translate(0,0) scale(1)', offset: 1 }];
+    }
+    p.animate(k, { duration: dur, easing: 'cubic-bezier(.4,0,.2,1)' }).onfinish = () => { d.style.zIndex = ''; };
+    dust(T, dur * .85);
   };
   const F = cell(mv.from, bot), T = cell(mv.to, bot);
-  if (mv.promotion) {
-    const dest = sq(T), pb = dest.querySelector('b'), color = pb ? cor(g.b[sqIdx(mv.to)]) : 'w';
+  if (mv.promotion && !calm) {
+    const dest = sq(T), pb = dest.querySelector('.pc'), color = pb ? cor(g.b[sqIdx(mv.to)]) : 'w';
     if (pb) pb.style.visibility = 'hidden';
     const box = fxBox(F), fr = document.createElement('div');
     fr.className = 'frag p' + color; fr.innerHTML = bt('P'); box.append(fr);
@@ -182,12 +195,13 @@ function playAnim(a, bot) {
       }
       burst(T, sz);
     }, 300);
-  } else hop(mv.from, mv.to, (g.b[sqIdx(mv.to)] || '').toUpperCase() === 'N');
-  if (a.rook) hop(a.rook.from, a.rook.to, false);
+  } else hop(mv.from, mv.to, mv.promotion ? 'P' : (g.b[sqIdx(mv.to)] || '').toUpperCase());
+  if (a.rook) hop(a.rook.from, a.rook.to, 'R');
   if (a.cap) shatter(a.cap, a.capSq, bot, sz);
 }
 
 function shatter(cap, sq, bot, sz) {
+  if (still()) return;
   const P = cell(sq, bot), box = document.createElement('div'), DELAY = 280;
   box.className = 'fxs';
   box.style.left = P.c * 12.5 + '%'; box.style.top = P.r * 12.5 + '%';
@@ -322,7 +336,8 @@ function render() {
     const pl = S.p[c], o = c === 'w' ? 'b' : 'w', e = $(id), diff = mat(c) - mat(o);
     e.dataset.c = c;
     e.querySelector('.nm').textContent = (pl ? pl.n : 'Aguardando…') + (pl && !pl.on ? ' (offline)' : '');
-    e.querySelector('.cap').textContent = lost(o).map(gl).join('') + (diff > 0 ? ' +' + diff : '');
+    e.querySelector('.ttl').textContent = (pl && TITLE_TEXT[pl.t]) || '';
+    e.querySelector('.cap').innerHTML = `<span class="p${o}">` + lost(o).map(k => pieceSVG(k)).join('') + '</span>' + (diff > 0 ? ' +' + diff : '');
   }
 
   const pl = !!me(), playing = S.status === 'playing', over = S.status === 'over', opp = me() === 'w' ? 'b' : 'w';
@@ -411,10 +426,11 @@ function startBot(idx) {
 
 function localPush() {
   const L = LC, B = L.bot;
-  const nm = c => (B ? (L.human === c ? 'Você' : B.name) : c === 'w' ? 'Brancas' : 'Pretas');
+  const nm = c => (B ? (L.human === c ? auth.user || localStorage.nome || 'Você' : B.name) : c === 'w' ? 'Brancas' : 'Pretas');
+  const tt = c => (B && L.human === c ? prog.title : '');
   update({
     t: 'state', you: B ? L.human : L.status === 'playing' ? lg.turn : 'w', code: 'LOCAL', base: L.base, inc: L.inc,
-    p: { w: { n: nm('w'), on: true }, b: { n: nm('b'), on: true } },
+    p: { w: { n: nm('w'), on: true, t: tt('w') }, b: { n: nm('b'), on: true, t: tt('b') } },
     moves: L.moves.slice(), status: L.status, result: L.result, draw: null, rematch: {},
     clock: { ...L.clock }, since: L.since, now: Date.now(), chat: [], spec: 0, game: L.game,
   });
@@ -495,12 +511,15 @@ function botWon() {
   const nxt = idx + 1 < LEVELS.length ? idx + 1 : -1;
   const wait = LC.result.reason === 'checkmate' ? 4200 : 900;
   renderBots(); renderSkins();
-  setTimeout(() => reward(idx, gifts, nxt), wait);
+  const evr = eventWin();
+  checkAwards(toast);
+  setTimeout(() => reward(idx, gifts, nxt, evr), wait);
 }
-function reward(idx, gifts, nxt) {
+function reward(idx, gifts, nxt, evr = []) {
   const d = $('#dlg');
   d.innerHTML = `<p><b>Vitória!</b> Você venceu o robô de ${LEVELS[idx]}.</p>` +
     (gifts.length ? `<p>🎁 Skin desbloqueada: <b>${gifts.map(s => s.nome).join(', ')}</b></p>` : '') +
+    (evr.length ? `<p>🎉 ${evr.join('<br>')}</p>` : '') +
     (nxt >= 0 ? `<p>Próximo robô: ${LEVELS[nxt]}</p>` : '<p>Você derrotou todos os robôs!</p>') +
     '<div class="row"><button id="rw-x">Fechar</button>' + (nxt >= 0 ? '<button class="p" id="rw-n">Próximo nível</button>' : '') + '</div>';
   d.onclose = null;
@@ -528,60 +547,64 @@ function renderBots() {
   });
 }
 // ---------- skins (tabuleiro e peças separados) ----------
-const SK = id => SKINS.find(s => s.id === id) || SKINS[0];
 const PT = [['K', 'Rei'], ['Q', 'Dama'], ['R', 'Torre'], ['B', 'Bispo'], ['N', 'Cavalo'], ['P', 'Peão']];
-const cellP = (cls, sk, t) => `<span class="${cls}"><b data-ps="${sk}">${SK(sk).set[t]}</b></span>`;
-const hint = (ok, on, s) => (ok ? (on ? 'Em uso' : 'Usar') : '🔒 Vença o robô de ' + s.at);
+const req = s => (s.ev ? 'Evento: ' + s.evn : 'Robô ' + s.at);
+const pair = (t, sk) => `<span class="c l pw">${pieceSVG(t, sk)}</span><span class="c d pb">${pieceSVG(t, sk)}</span>`;
+let skMode = 'b';
 
+function chip(s, on, label, fn) {
+  const ok = skinOpen(s), b = document.createElement('button');
+  b.className = 'chip' + (on ? ' on' : ''); b.disabled = !ok; b.title = ok ? s.nome : 'Desbloqueie: ' + req(s);
+  b.innerHTML = label + (ok ? '' : '<i class="lk">🔒</i>');
+  b.onclick = fn;
+  return b;
+}
 function renderSkins() {
   const K = $('#skins');
-  K.innerHTML = '';
-  const title = t => K.append(el('h3', t));
-  const grid = () => { const d = document.createElement('div'); d.className = 'skg'; K.append(d); return d; };
-
-  title('Tabuleiro');
-  let G = grid();
-  for (const s of SKINS) {
-    const ok = skinOpen(s), b = document.createElement('button');
-    b.className = 'sk' + (prog.board === s.id ? ' on' : ''); b.disabled = !ok;
-    b.innerHTML = `<div class="pv" data-board="${s.id}"><span class="l"></span><span class="d"></span><span class="d"></span><span class="l"></span></div><strong>${s.nome}</strong><small>${hint(ok, prog.board === s.id, s)}</small>`;
-    b.onclick = () => { setBoard(s.id); renderSkins(); };
-    G.append(b);
-  }
-
-  title('Peças: aplicar um conjunto em todas');
-  G = grid();
-  for (const s of SKINS) {
-    const ok = skinOpen(s), b = document.createElement('button'), all = PT.every(([t]) => prog.pieces[t] === s.id);
-    b.className = 'sk' + (all ? ' on' : ''); b.disabled = !ok;
-    b.innerHTML = `<div class="pv">${cellP('l pw', s.id, 'K')}${cellP('d pb', s.id, 'K')}${cellP('d pw', s.id, 'N')}${cellP('l pb', s.id, 'N')}</div><strong>${s.nome}</strong><small>${hint(ok, all, s)}</small>`;
-    b.onclick = () => { setAllPieces(s.id); renderSkins(); };
-    G.append(b);
-  }
-
-  title('Peças: escolher uma por uma');
-  for (const [t, nome] of PT) {
-    const row = document.createElement('div'), sel = document.createElement('select'), pv = document.createElement('div');
-    row.className = 'prow'; pv.className = 'pv pv2';
+  K.innerHTML = '<div class="skl"><div class="skprev"><div class="abd"><div class="brd" id="skbrd"></div></div></div>' +
+    '<div class="skctl"><div class="seg"><button data-m="b">Tabuleiro</button><button data-m="p">Peças</button></div><div id="skpanel"></div></div></div>';
+  draw($('#skbrd'), new Chess(), null, 'w', null);
+  K.querySelectorAll('.seg button').forEach(b => {
+    b.classList.toggle('on', b.dataset.m === skMode);
+    b.onclick = () => { skMode = b.dataset.m; renderSkins(); };
+  });
+  const P = $('#skpanel');
+  if (skMode === 'b') {
+    const g = document.createElement('div');
+    g.className = 'swg';
     for (const s of SKINS) {
-      const o = document.createElement('option');
-      o.value = s.id; o.textContent = s.nome + (skinOpen(s) ? '' : ' 🔒'); o.disabled = !skinOpen(s);
-      sel.append(o);
+      const ok = skinOpen(s), b = document.createElement('button');
+      b.className = 'sw' + (prog.board === s.id ? ' on' : ''); b.disabled = !ok; b.title = ok ? s.nome : 'Desbloqueie: ' + req(s);
+      b.innerHTML = `<span class="sws"><i style="background:${s.bd[0]}"></i><i style="background:${s.bd[1]}"></i></span><b>${s.nome}</b><small>${ok ? (prog.board === s.id ? 'Em uso' : 'Usar') : '🔒 ' + req(s)}</small>`;
+      b.onclick = () => { setBoard(s.id); renderSkins(); };
+      g.append(b);
     }
-    sel.value = prog.pieces[t];
-    pv.innerHTML = cellP('l pw', prog.pieces[t], t) + cellP('d pb', prog.pieces[t], t);
-    sel.onchange = () => { setPiece(t, sel.value); renderSkins(); };
-    row.append(el('span', nome, 'n'), sel, pv);
-    K.append(row);
+    P.append(g);
+    return;
+  }
+  P.append(el('h3', 'Conjunto completo'));
+  const all = document.createElement('div');
+  all.className = 'chips';
+  for (const s of SKINS)
+    all.append(chip(s, PT.every(([t]) => prog.pieces[t] === s.id), pair('K', s.id) + `<small>${s.nome}</small>`, () => { setAllPieces(s.id); renderSkins(); }));
+  P.append(all);
+  P.append(el('h3', 'Uma peça de cada vez'));
+  for (const [t, nome] of PT) {
+    const r = document.createElement('div'), c = document.createElement('div');
+    r.className = 'prow'; c.className = 'chips';
+    for (const s of SKINS) c.append(chip(s, prog.pieces[t] === s.id, pair(t, s.id), () => { setPiece(t, s.id); renderSkins(); }));
+    r.append(el('b', nome), c);
+    P.append(r);
   }
 }
 
 // ---------- abas ----------
-const TABS = ['play', 'bots', 'skins', 'an', 'acc'];
+const TABS = ['play', 'bots', 'skins', 'an', 'prof', 'acc'];
 function tab(n) {
   document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === n));
   for (const t of TABS) $('#sec-' + t).hidden = t !== n;
   if (n === 'an') renderGames();
+  if (n === 'prof') renderProf();
 }
 document.querySelectorAll('#nav button').forEach(b => { b.onclick = () => tab(b.dataset.tab); });
 
@@ -611,17 +634,40 @@ function renderGames() {
     const w = g.result && g.result.winner, res = !w ? 'Empate' : w === g.color ? 'Vitória' : 'Derrota';
     const b = document.createElement('button');
     b.className = 'gm';
-    b.append(el('b', res + ' · ' + (g.mode === 'local' ? 'Partida local' : 'contra ' + g.opp)),
+    b.append(el('b', g.mode === 'pgn' ? 'PGN · ' + g.title : res + ' · ' + (g.mode === 'local' ? 'Partida local' : 'contra ' + g.opp)),
       el('small', new Date(g.date).toLocaleString('pt-BR') + ' · ' + g.moves.length + ' lances' + (g.an ? ' · analisada' : '')));
-    b.onclick = () => openAnalysis(g, { save: putGame });
+    b.onclick = () => openAnalysis(g, { save: saveAn });
     L.append(b);
   }
 }
+const saveAn = g => {
+  putGame(g);
+  if (g.an) { grant('badges', 'analista', toast); grant('titles', 'analista', toast); }
+};
+const renderProf = () => renderProfile({ name: auth.user || localStorage.nome || 'Jogador', games: getGames().length, toast });
+// PGN
+function runPgn(text) {
+  const r = parsePgn(text), msg = $('#pgnMsg');
+  if (r.error) { msg.textContent = r.error; return; }
+  msg.textContent = '';
+  const gm = { id: Date.now(), date: new Date().toISOString(), mode: 'pgn', title: r.title, opp: r.title, color: 'w', result: r.result, moves: r.moves };
+  putGame(gm);
+  openAnalysis(gm, { save: saveAn });
+}
+$('#pgnGo').onclick = () => runPgn($('#pgn').value);
+$('#pgnOpen').onclick = () => $('#pgnFile').click();
+$('#pgnFile').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('#pgn').value = await f.text();
+  e.target.value = '';
+  runPgn($('#pgn').value);
+};
 $('#analyze').onclick = () => {
   const gm = lastGame && lastGame.moves.length === S.moves.length ? lastGame : gameRecord(S);
   $('#game').hidden = true; $('#home').hidden = false;
   tab('an');
-  openAnalysis(gm, { save: putGame, back: () => { $('#home').hidden = true; $('#game').hidden = false; } });
+  openAnalysis(gm, { save: saveAn, back: () => { $('#home').hidden = true; $('#game').hidden = false; } });
 };
 
 // ---------- conta ----------
@@ -638,13 +684,19 @@ function accUI() {
   $('#aname').textContent = auth.user;
   document.querySelector('#nav [data-tab=acc]').textContent = auth.user ? '👤 ' + auth.user : 'Conta';
 }
+const uni = (a = [], b = []) => [...new Set([...a, ...b])];
+function mergeProg(l, s) {
+  const base = (s.best ?? -1) >= l.best ? { ...l, ...s } : { ...s, ...l }, ev = { ...(s.ev || {}) };
+  for (const [k, v] of Object.entries(l.ev || {})) ev[k] = Math.max(ev[k] || 0, v);
+  return { ...base, best: Math.max(l.best, s.best ?? -1), badges: uni(l.badges, s.badges), titles: uni(l.titles, s.titles), xs: uni(l.xs, s.xs), ev, avatar: base.avatar || l.avatar || s.avatar || '' };
+}
 async function syncDown() {
   const j = await api('me', {}), s = j.prog || {};
-  if ((s.best ?? -1) >= prog.best) replaceProg({ ...prog, ...s }); else save();
+  replaceProg(mergeProg(prog, s)); save();
   const have = new Set((j.games || []).map(g => g.id)), loc = getGames(), mine = loc.filter(g => !have.has(g.id));
   localStorage[GK] = JSON.stringify([...(j.games || []), ...mine].sort((a, b) => b.id - a.id).slice(0, 30));
   for (const g of mine.slice(0, 10)) api('game', { game: g }).catch(() => {});
-  renderBots(); renderSkins(); renderGames();
+  renderBots(); renderSkins(); renderGames(); checkAwards(toast);
 }
 async function enter(a) {
   $('#amsg').textContent = '…';
@@ -653,7 +705,8 @@ async function enter(a) {
     auth.token = j.token; auth.user = j.user;
     localStorage.tk = j.token; localStorage.tu = j.user;
     $('#ap').value = ''; $('#amsg').textContent = '';
-    await syncDown(); accUI();
+    $('#name').value = j.user; localStorage.nome = j.user;
+    await syncDown(); grant('badges', 'conta', toast); accUI();
     toast('Bem-vindo, ' + j.user + '!');
   } catch (e) { $('#amsg').textContent = e.message; }
 }
@@ -670,7 +723,7 @@ hooks.push = () => {
   pushT = setTimeout(() => api('save', { prog }).catch(() => {}), 800);
 };
 
-renderBots(); renderSkins(); accUI();
+renderBots(); renderSkins(); accUI(); checkAwards(toast);
 if (auth.token) syncDown().catch(e => { if (e.status === 401) clearAuth(); }).finally(accUI);
 
 const mb = $('#mute'), mlabel = () => { mb.textContent = muted() ? '🔇 Som' : '🔊 Som'; };

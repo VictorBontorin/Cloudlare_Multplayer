@@ -1,6 +1,7 @@
 // Análise de partidas: avalia cada lance com o Stockfish e classifica (Brilhante ... Capivarada).
 import { Chess, sqName } from '/chess.js';
-import { Engine, glyph, pskin } from '/bot.js';
+import { Engine } from '/bot.js';
+import { pieceSVG } from '/pieces.js';
 
 const $ = s => document.querySelector(s);
 const F = 'abcdefgh';
@@ -87,6 +88,22 @@ const sanOf = (g, legal, uci) => {
   return m ? g.san(m, legal) : '';
 };
 
+const PN = { P: ['peão', 'um peão'], N: ['cavalo', 'um cavalo'], B: ['bispo', 'um bispo'], R: ['torre', 'uma torre'], Q: ['dama', 'uma dama'] };
+const art = c => (PN[(c || '').toUpperCase()] || ['peça', 'uma peça'])[1];
+const mateN = cp => Math.max(1, Math.round((10000 - Math.abs(cp)) / 10));
+const fev = cp => (Math.abs(cp) >= 9000 ? (cp > 0 ? 'mate a favor em ' : 'mate contra em ') + mateN(cp)
+  : (cp >= 0 ? '+' : '−') + (Math.abs(cp) / 100).toFixed(1));
+
+function arrow(svg, u, bot) {
+  svg.innerHTML = '';
+  if (!u) return;
+  const pt = q => { const f = F.indexOf(q[0]), r = 8 - q[1]; return bot === 'w' ? [f + 0.5, r + 0.5] : [7 - f + 0.5, 7 - r + 0.5]; };
+  const [x1, y1] = pt(u.slice(0, 2)), [x2, y2] = pt(u.slice(2, 4)), dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1;
+  const ux = dx / L, uy = dy / L, ex = x2 - ux * 0.4, ey = y2 - uy * 0.4, w = 0.3;
+  svg.innerHTML = `<line x1="${x1}" y1="${y1}" x2="${ex}" y2="${ey}" stroke="#3fbf4f" stroke-width=".17" stroke-linecap="round" opacity=".85"/>` +
+    `<polygon points="${x2},${y2} ${ex - uy * w},${ey + ux * w} ${ex + uy * w},${ey - ux * w}" fill="#3fbf4f" opacity=".9"/>`;
+}
+
 export async function analyze(moves, onProg) {
   const e = new Engine();
   try {
@@ -110,7 +127,10 @@ export async function analyze(moves, onProg) {
       const Wb = wp(s * ev[i].cp), Wa = wp(s * ev[i + 1].cp), loss = Math.max(0, Wb - Wa);
       const played = m.from + m.to + (m.promotion || ''), isBest = played === ev[i].best;
       const bestSan = ev[i].best && ev[i].best !== '(none)' ? sanOf(h, legal, ev[i].best) : '';
+      const bm = legal.find(x => sqName(x.from) + sqName(x.to) + (x.pr || '') === ev[i].best);
       h.move(m);
+      const legal2 = h.moves(), rm = legal2.find(x => sqName(x.from) + sqName(x.to) + (x.pr || '') === ev[i + 1].best);
+      const replySan = rm ? h.san(rm, legal2) : '';
       const name = bk.get(pkey(h));
       let c;
       if (i < 24 && name) c = 'book';
@@ -125,7 +145,27 @@ export async function analyze(moves, onProg) {
         else if (isBest && second && Wb < 90 && Wb - wp(s * second.cp) >= 12) c = 'great';
         else c = isBest ? 'best' : 'exc';
       } else c = loss <= 5 ? 'good' : loss <= 10 ? 'inac' : loss <= 20 ? 'mist' : 'blun';
-      out.c.push(c); out.b.push(bestSan); out.o.push(c === 'book' ? name : '');
+      const Eb = s * ev[i].cp, Ea = s * ev[i + 1].cp, mateB = Eb >= 9000, mateA = Ea <= -9000;
+      let why;
+      if (c === 'book') why = `Lance de livro${name ? ': ' + name : ''}. É um caminho conhecido da teoria de aberturas.`;
+      else if (c === 'bril') why = `Sacrifício de ${art(lm.piece)}: parece entregar material, mas o Stockfish confirma que a posição continua boa (${fev(Ea)}).`;
+      else if (c === 'great') why = `Era praticamente o único lance forte: o segundo melhor teria avaliação bem pior. Mantém ${fev(Ea)}.`;
+      else if (c === 'best') why = `É o lance que o Stockfish mais recomenda. Avaliação: ${fev(Ea)}.`;
+      else if (c === 'exc') why = `Quase tão bom quanto o melhor${bestSan ? ' (' + bestSan + ')' : ''}. Avaliação: ${fev(Ea)}.`;
+      else if (c === 'good') why = `Lance razoável, mas ${bestSan || 'outro lance'} era um pouco mais forte. Avaliação: ${fev(Eb)} → ${fev(Ea)}.`;
+      else {
+        const p = [`A avaliação caiu de ${fev(Eb)} para ${fev(Ea)}.`];
+        if (mateA) p.push(`Permite xeque-mate em ${mateN(Ea)}.`);
+        else if (rm && rm.cap) p.push(`Agora ${replySan} ganha ${art(rm.cap)}.`);
+        if (bm && bestSan) {
+          if (mateB) p.push(`Havia xeque-mate em ${mateN(Eb)} com ${bestSan}.`);
+          else if (bm.cap && !(rm && rm.cap)) p.push(`${bestSan} ganhava ${art(bm.cap)}.`);
+          else p.push(`${bestSan} era o lance mais preciso.`);
+        }
+        why = p.join(' ');
+      }
+      out.c.push(c); out.b.push(bestSan); out.o.push(c === 'book' ? name : ''); out.e.push(why);
+      out.u.push(bm && !isBest && c !== 'book' && c !== 'bril' ? ev[i].best : '');
       sum[side].push(c === 'book' ? 100 : acc(loss));
     }
     for (const k of ['w', 'b']) out.a[k] = sum[k].length ? Math.round(sum[k].reduce((a, b) => a + b, 0) / sum[k].length * 10) / 10 : 0;
@@ -133,13 +173,13 @@ export async function analyze(moves, onProg) {
   } finally { e.w.terminate(); }
 }
 
-function draw(el, g, last, bot, badge) {
+export function draw(el, g, last, bot, badge) {
   el.innerHTML = '';
   for (let i = 0; i < 64; i++) {
     const r = bot === 'w' ? i >> 3 : 7 - (i >> 3), f = bot === 'w' ? i & 7 : 7 - (i & 7);
     const n = F[f] + (8 - r), p = g.b[r * 8 + f], d = document.createElement('div');
     d.className = 'sq ' + ((r + f) % 2 ? 'd' : 'l') + (p ? ' p' + (p < 'a' ? 'w' : 'b') : '') + (last && (n === last.from || n === last.to) ? ' lm' : '');
-    d.innerHTML = (p ? `<b data-ps="${pskin(p)}">${glyph(p)}</b>` : '') +
+    d.innerHTML = (p ? pieceSVG(p) : '') +
       (badge && last && n === last.to ? `<i class="bgd" style="background:${badge[2]}">${badge[1]}</i>` : '');
     el.append(d);
   }
@@ -148,7 +188,7 @@ function draw(el, g, last, bot, badge) {
 export async function openAnalysis(game, opt = {}) {
   const V = $('#aview'), moves = game.moves, n = moves.length, bot = game.color || 'w';
   $('#alist').hidden = true; V.hidden = false;
-  V.innerHTML = `<div class="an"><div class="anl"><div class="abd"><div class="brd" id="abrd"></div></div>
+  V.innerHTML = `<div class="an"><div class="anl"><div class="abd"><div class="abw"><div class="brd" id="abrd"></div><svg class="arw" id="aarw" viewBox="0 0 8 8"></svg></div></div>
     <div class="row anav"><button id="a0">⏮</button><button id="a1">◀</button><button id="a2">▶</button><button id="a3">⏭</button></div></div>
     <div class="anr"><div id="aprog" class="mt"></div><div id="asum"></div><svg id="agr" viewBox="0 0 300 60" preserveAspectRatio="none"></svg>
     <div id="anote"></div><div id="amv"></div><button id="aback">Voltar</button></div></div>`;
@@ -160,11 +200,13 @@ export async function openAnalysis(game, opt = {}) {
     ply = Math.max(0, Math.min(n, p));
     const g = at(ply), last = ply ? moves[ply - 1] : null, c = an && ply ? an.c[ply - 1] : null;
     draw(q('#abrd'), g, last, bot, c ? CLS[c] : null);
+    arrow(q('#aarw'), an && ply && an.u ? an.u[ply - 1] : '', bot);
     let t = ply ? `<b>${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'} ${moves[ply - 1].san}</b>` : 'Posição inicial';
     if (c) {
       t += ` — <span class="bg" style="background:${CLS[c][2]}">${CLS[c][1]}</span>${CLS[c][0]}`;
       if (c === 'book' && an.o[ply - 1]) t += ` (${an.o[ply - 1]})`;
-      if (['inac', 'mist', 'blun'].includes(c) && an.b[ply - 1]) t += `. Melhor era <b>${an.b[ply - 1]}</b>`;
+      if (an.e && an.e[ply - 1]) t += `<br><span class="why">${an.e[ply - 1]}</span>`;
+      if (an.u && an.u[ply - 1] && an.b[ply - 1]) t += `<br><span class="best">Melhor: <b>${an.b[ply - 1]}</b> (seta verde)</span>`;
     }
     q('#anote').innerHTML = t;
     V.querySelectorAll('#amv button').forEach(b => b.classList.toggle('on', +b.dataset.p === ply));
@@ -226,4 +268,31 @@ export async function openAnalysis(game, opt = {}) {
   if (!run.on) return;
   q('#aprog').textContent = '';
   summary(); graph(); list(); show(ply);
+}
+
+// Lê o primeiro jogo de um texto PGN. Devolve { moves, title, result } ou { error }.
+export function parsePgn(text) {
+  const first = String(text || '').replace(/\r/g, '').trim().split(/\n\s*\n(?=\[)/)[0] || '';
+  const hd = {};
+  first.replace(/^\[(\w+)\s+"([^"]*)"\]/gm, (m, k, v) => { hd[k] = v; return m; });
+  if (hd.FEN || hd.SetUp === '1') return { error: 'PGN com posição inicial personalizada ainda não é suportado.' };
+  let t = first.replace(/^\[.*\]\s*$/gm, '').replace(/\{[^}]*\}/g, ' ').replace(/;[^\n]*/g, ' ');
+  for (let i = 0; i < 10; i++) t = t.replace(/\([^()]*\)/g, ' ');
+  t = t.replace(/\$\d+/g, ' ').replace(/(^|\s)(1-0|0-1|1\/2-1\/2|\*)(?=\s|$)/g, ' ').replace(/\d+\.(\.\.)?/g, ' ');
+  const toks = t.split(/\s+/).filter(Boolean), g = new Chess(), moves = [];
+  if (!toks.length) return { error: 'Não encontrei lances nesse PGN.' };
+  for (let tok of toks) {
+    tok = tok.replace(/[!?]+/g, '').replace(/0-0-0/g, 'O-O-O').replace(/0-0/g, 'O-O').replace(/e\.p\./g, '')
+      .replace(/([a-h][18])=?([QRBNqrbn])$/, (m, sq, p) => sq + '=' + p.toUpperCase());
+    if (!tok) continue;
+    const m = fromSan(g, tok);
+    if (!m) return { error: `Lance inválido no PGN: "${tok}" (lance ${moves.length + 1}).` };
+    const r = g.move(mv(m));
+    moves.push({ from: r.from, to: r.to, san: r.san, promotion: r.promotion });
+    if (moves.length > 400) return { error: 'PGN longo demais (máximo de 400 lances).' };
+  }
+  const R = hd.Result, end = g.result();
+  const result = R === '1-0' ? { winner: 'w', reason: 'pgn' } : R === '0-1' ? { winner: 'b', reason: 'pgn' }
+    : end.over ? { winner: end.winner, reason: end.reason } : { winner: null, reason: 'pgn' };
+  return { moves, result, title: `${hd.White || 'Brancas'} × ${hd.Black || 'Pretas'}` };
 }

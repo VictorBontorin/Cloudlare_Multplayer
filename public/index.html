@@ -11,9 +11,9 @@
 
 <main id="home">
   <h1>Xadrez</h1>
-  <nav id="nav"><button data-tab="play" class="on">Jogar</button><button data-tab="bots">Robôs</button><button data-tab="skins">Skins</button><button data-tab="an">Análise</button><button data-tab="acc">Conta</button></nav>
+  <nav id="nav"><button data-tab="play" class="on">Jogar</button><button data-tab="bots">Robôs</button><button data-tab="skins">Skins</button><button data-tab="an">Análise</button><button data-tab="prof">Perfil</button><button data-tab="acc">Conta</button></nav>
   <section id="sec-play">
-  <p class="mt">Crie uma partida, mande o link e jogue em tempo real. Sem cadastro.</p>
+  
   <div class="card">
     <input id="name" placeholder="Seu nome" maxlength="20" autocomplete="nickname">
     <div class="row">
@@ -54,9 +54,19 @@
   </section>
   <section id="sec-an" hidden>
     <p class="mt">Suas últimas partidas. Escolha uma para ver cada lance classificado pelo Stockfish.</p>
+    <div class="card">
+      <textarea id="pgn" rows="4" placeholder="Cole aqui um PGN para analisar"></textarea>
+      <div class="row">
+        <button class="p" id="pgnGo">Analisar PGN</button>
+        <button id="pgnOpen">Abrir arquivo .pgn</button>
+        <input type="file" id="pgnFile" accept=".pgn,text/plain" hidden>
+      </div>
+      <small id="pgnMsg" class="mt"></small>
+    </div>
     <div id="alist"></div>
     <div id="aview" hidden></div>
   </section>
+  <section id="sec-prof" hidden><div id="prof"></div></section>
   <section id="sec-acc" hidden>
     <div class="card" id="acc-out">
       <p class="mt">Entre para salvar progresso, skins e partidas, e continuar de onde parou em outro dispositivo.</p>
@@ -79,9 +89,9 @@
 
 <main id="game" hidden>
   <section class="bd">
-    <div class="pl" id="top"><span class="nm"></span><span class="cap"></span><span class="clk"></span></div>
+    <div class="pl" id="top"><div class="who"><span class="nm"></span><small class="ttl"></small></div><span class="cap"></span><span class="clk"></span></div>
     <div id="bw"><div id="board"></div><div id="fx"></div></div>
-    <div class="pl" id="bot"><span class="nm"></span><span class="cap"></span><span class="clk"></span></div>
+    <div class="pl" id="bot"><div class="who"><span class="nm"></span><small class="ttl"></small></div><span class="cap"></span><span class="clk"></span></div>
   </section>
   <aside>
     <div id="room"><span>Código da sala</span><b id="rcode"></b><button id="cpcode">Copiar</button></div>
